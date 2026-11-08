@@ -99,9 +99,14 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
     }),
     Spec.make("acp", {
       description: "Start an Agent Client Protocol server",
+      globalFlags: ServerFlags,
       params: {
         login: Flag.Boolean("login").pipe(
           Flag.withDescription("Run auth login instead of starting the server"),
+          Flag.withDefault(false),
+        ),
+        shared: Flag.Boolean("shared").pipe(
+          Flag.withDescription("Use the shared background service instead of a private server"),
           Flag.withDefault(false),
         ),
       },

@@ -74,27 +74,49 @@ export async function createAcpFixture(
   await Bun.write(models, "{}")
 
   const processes = new Set<AcpProcess>()
+  const servers = new Set<Bun.Subprocess>()
+  const env = (overrides: Record<string, string> = {}) =>
+    isolatedEnv(root, {
+      USERPROFILE: root,
+      OPENCODE_CONFIG: undefined,
+      OPENCODE_CONFIG_CONTENT: undefined,
+      OPENCODE_DISABLE_AUTOUPDATE: "true",
+      OPENCODE_MODELS_PATH: models,
+      ...overrides,
+    })
   return {
     root,
     home,
     llm: { requests },
-    spawn() {
-      const acp = spawnAcp({
-        env: isolatedEnv(root, {
-          USERPROFILE: root,
-          OPENCODE_CONFIG: undefined,
-          OPENCODE_CONFIG_CONTENT: undefined,
-          OPENCODE_DISABLE_AUTOUPDATE: "true",
-          OPENCODE_MODELS_PATH: models,
-        }),
-      })
+    spawn(args: readonly string[] = [], overrides: Record<string, string> = {}) {
+      const acp = spawnAcp({ args, env: env(overrides) })
       processes.add(acp)
       return acp
     },
-    async [Symbol.asyncDispose]() {
-      const processResults = await Promise.allSettled(
-        [...processes].map((process) => process.close().catch(() => process[Symbol.asyncDispose]())),
+    /** Starts `opencode serve` on this fixture's data. Clients attach to it with `--server`. */
+    async serve() {
+      const password = "fixture-password"
+      const child = Bun.spawn(
+        [process.execPath, "run", "src/index.ts", "serve", "--hostname", "127.0.0.1", "--port", "0"],
+        {
+          cwd: path.join(import.meta.dir, "../.."),
+          env: env({ OPENCODE_PASSWORD: password }),
+          stdout: "pipe",
+          stderr: "ignore",
+        },
       )
+      servers.add(child)
+      const url = await readListening(child.stdout)
+      return { url, authorization: `Basic ${btoa(`opencode:${password}`)}`, password }
+    },
+    async [Symbol.asyncDispose]() {
+      const processResults = await Promise.allSettled([
+        ...[...processes].map((process) => process.close().catch(() => process[Symbol.asyncDispose]())),
+        ...[...servers].map((server) => {
+          server.kill()
+          return server.exited
+        }),
+      ])
       const serverResults = await Promise.allSettled([llm.stop(true)])
       const directoryResults = await Promise.allSettled([
         fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }),
@@ -185,8 +207,28 @@ function verifierConfig(llmUrl: string) {
   }
 }
 
-function spawnAcp(input: { readonly env: Record<string, string | undefined> }): AcpProcess {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", "acp"], {
+async function readListening(stdout: ReadableStream<Uint8Array>) {
+  const decoder = new TextDecoder()
+  const reader = stdout.getReader()
+  const read = async (text: string): Promise<string> => {
+    const url = /server listening on (\S+)/.exec(text)?.[1]
+    if (url) return url
+    const chunk = await reader.read()
+    if (chunk.done) throw new Error(`server exited before listening: ${text}`)
+    return read(text + decoder.decode(chunk.value, { stream: true }))
+  }
+  const url = await read("")
+  reader.releaseLock()
+  // Read the rest of the output, so later server output cannot fill the pipe.
+  void stdout.pipeTo(new WritableStream()).catch(() => {})
+  return url
+}
+
+function spawnAcp(input: {
+  readonly args: readonly string[]
+  readonly env: Record<string, string | undefined>
+}): AcpProcess {
+  const child = Bun.spawn([process.execPath, "run", "src/index.ts", "acp", ...input.args], {
     cwd: path.join(import.meta.dir, "../.."),
     env: input.env,
     stdin: "pipe",

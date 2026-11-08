@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createAcpFixture, initialize } from "./subprocess"
+import { createAcpFixture, initialize, newSession } from "./subprocess"
 
 describe("acp lifecycle subprocess", () => {
   test("stdin EOF exits cleanly", async () => {
@@ -32,6 +32,28 @@ describe("acp lifecycle subprocess", () => {
       expect(exited).toBe(1)
       await acp[Symbol.asyncDispose]()
       expect(acp.stderr()).toContain("opencode acp: server exited unexpectedly (signal SIGKILL)")
+    },
+    60_000,
+  )
+
+  testOutsideWindows(
+    "--server attaches to that server instead of starting a private one",
+    async () => {
+      await using fixture = await createAcpFixture()
+      const server = await fixture.serve()
+      const acp = fixture.spawn(["--server", server.url], { OPENCODE_PASSWORD: server.password })
+      await initialize(acp)
+      const session = await newSession(acp, fixture.home)
+
+      expect(
+        Bun.spawnSync(["pgrep", "-P", String(acp.pid)])
+          .stdout.toString()
+          .trim(),
+      ).toBe("")
+      const stored = await fetch(`${server.url}/api/session/${session.sessionId}`, {
+        headers: { authorization: server.authorization },
+      })
+      expect(stored.status).toBe(200)
     },
     60_000,
   )
