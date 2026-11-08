@@ -1,0 +1,29 @@
+#!/bin/sh
+# Zed runs this command on the remote host. It starts the patched `opencode acp` and attaches it to the server.
+# It loads the server password from opencode's server.env, so Zed's settings do not contain the password.
+#
+#   OPENCODE_ACP_SERVER   server to attach to (default http://127.0.0.1:4097); set to "shared" for the
+#                         background service the TUI uses
+#   OPENCODE_ACP_BIN      patched binary (default ~/.local/bin/opencode-acp)
+#
+# Tracing: while ~/.local/state/opencode/acp-trace exists, ACP traffic is logged to
+# ~/.local/state/opencode/acp-trace-<pid>.{in,out,err}.
+set -a
+[ -f "$HOME/.config/opencode/server.env" ] && . "$HOME/.config/opencode/server.env"
+set +a
+
+BIN="${OPENCODE_ACP_BIN:-$HOME/.local/bin/opencode-acp}"
+SERVER="${OPENCODE_ACP_SERVER:-http://127.0.0.1:4097}"
+if [ "$SERVER" = "shared" ]; then
+  set -- acp --shared "$@"
+else
+  set -- acp --server "$SERVER" "$@"
+fi
+
+STATE="$HOME/.local/state/opencode"
+if [ -e "$STATE/acp-trace" ]; then
+  LOG="$STATE/acp-trace-$$"
+  tee -a "$LOG.in" | "$BIN" "$@" 2>>"$LOG.err" | tee -a "$LOG.out"
+  exit $?
+fi
+exec "$BIN" "$@"
