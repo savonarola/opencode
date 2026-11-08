@@ -2,10 +2,13 @@ import { MessageTooLargeError, ndJsonStream } from "@agentclientprotocol/sdk"
 import { OpenCode } from "@opencode/client/effect"
 import { Service } from "@opencode/client/effect/service"
 import { CrossSpawnSpawner } from "@opencode/util/cross-spawn-spawner"
+import { Global } from "@opencode/util/global"
 import { Effect, Option } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
+import path from "node:path"
 import { Writable } from "node:stream"
 import { ACP } from "../../acp/agent"
+import { ACPSessionSwitch } from "../../acp/session-switch"
 import { Commands, Server } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
@@ -53,7 +56,14 @@ export default Runtime.handler(
       ),
       Effect.provide(FetchHttpClient.layer),
     )
-    const connection = yield* ACP.connect(client, ndJsonStream(Writable.toWeb(process.stdout), Bun.stdin.stream()))
+    const global = yield* Global.Service
+    const stream = yield* Effect.promise(() =>
+      ACPSessionSwitch.wrap(
+        ndJsonStream(Writable.toWeb(process.stdout), Bun.stdin.stream()),
+        path.join(global.state, "acp-session-links.json"),
+      ),
+    )
+    const connection = yield* ACP.connect(client, stream)
     const failure = yield* Effect.raceFirst(
       Effect.promise(() => connection.closed).pipe(
         Effect.map(() =>

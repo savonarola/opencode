@@ -33,6 +33,7 @@ import { createTwoFilesPatch } from "diff"
 import { Duration, Effect, Exit, Logger, Option, Schema, Scope } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { ACP } from "../../src/acp/agent"
+import { ACPSessionSwitch } from "../../src/acp/session-switch"
 import { ACPTurn } from "../../src/acp/turn"
 
 // The fake server sends and stores the wire form of each value.
@@ -146,6 +147,8 @@ export type WireOptions = {
     signal: AbortSignal,
   ) => CreateElicitationResponse | Promise<CreateElicitationResponse>
   readonly cancelDrainTimeout?: Duration.Input
+  /** Adds the session-command layer to the agent's stream. The layer saves thread links to this file. */
+  readonly sessionLinks?: string
 }
 
 type FormReply = {
@@ -430,7 +433,13 @@ export async function startWire(options: WireOptions = {}) {
   const agentConnection = await Effect.runPromise(
     OpenCode.make({ baseUrl: server.url }).pipe(
       Effect.provide(FetchHttpClient.layer),
-      Effect.flatMap((client) => ACP.connect(client, ndJsonStream(agentToClient.writable, clientToAgent.readable))),
+      Effect.flatMap((client) => {
+        const stream = ndJsonStream(agentToClient.writable, clientToAgent.readable)
+        const links = options.sessionLinks
+        return (links ? Effect.promise(() => ACPSessionSwitch.wrap(stream, links)) : Effect.succeed(stream)).pipe(
+          Effect.flatMap((wrapped) => ACP.connect(client, wrapped)),
+        )
+      }),
       Scope.provide(agentScope),
       (effect) =>
         options.cancelDrainTimeout === undefined
