@@ -49,6 +49,7 @@ const decodeCommand = Schema.decodeUnknownOption(
 )
 const decodeCommandsUpdate = Schema.decodeUnknownOption(
   Schema.Struct({
+    sessionId: Schema.String,
     update: Schema.Struct({
       sessionUpdate: Schema.Literal("available_commands_update"),
       availableCommands: Schema.Array(
@@ -60,7 +61,11 @@ const decodeCommandsUpdate = Schema.decodeUnknownOption(
 
 type Opened = { readonly cwd: string; readonly mcpServers: readonly unknown[] }
 
-export async function wrap(stream: Stream, stateFile: string): Promise<Stream> {
+export async function wrap(
+  stream: Stream,
+  stateFile: string,
+  options: { readonly commandRepeats?: readonly number[] } = {},
+): Promise<Stream> {
   const saved = await Bun.file(stateFile)
     .text()
     .catch(() => "{}")
@@ -72,6 +77,7 @@ export async function wrap(stream: Stream, stateFile: string): Promise<Stream> {
   const replies = new Map<string | number | null, (message: AnyResponse) => void>()
   const fresh = new Set<string>()
   const prompted = new Set<string>()
+  const commandLists = new Map<string, AnyMessage>()
   const toClient = stream.writable.getWriter()
   const toAgent = new TransformStream<AnyMessage, AnyMessage>()
   const agent = toAgent.writable.getWriter()
@@ -249,7 +255,7 @@ export async function wrap(stream: Stream, stateFile: string): Promise<Stream> {
     const update = decodeCommandsUpdate(routed.params)
     if (Option.isNone(update)) return toClient.write(routed)
     const own = new Set(commands.map((command) => command.name))
-    return toClient.write({
+    const list = {
       ...routed,
       params: {
         ...paramsOf(routed),
@@ -261,7 +267,18 @@ export async function wrap(stream: Stream, stateFile: string): Promise<Stream> {
           ],
         },
       },
-    })
+    }
+    // The agent sends the command list right after its `session/new` response. Zed 1.6 drops session updates
+    // that arrive before it registers the session. Zed then rejects every slash command as unknown.
+    // Send the latest list again after each delay. A client that received the first list gets the same list again.
+    const sessionId = update.value.sessionId
+    commandLists.set(sessionId, list)
+    ;(options.commandRepeats ?? [250, 1_000, 3_000]).forEach((delay) =>
+      setTimeout(() => {
+        if (commandLists.get(sessionId) === list) toClient.write(list).catch(() => {})
+      }, delay).unref(),
+    )
+    return toClient.write(list)
   }
 
   const respond = (message: AnyResponse) => {

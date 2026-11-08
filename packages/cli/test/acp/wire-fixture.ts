@@ -149,6 +149,8 @@ export type WireOptions = {
   readonly cancelDrainTimeout?: Duration.Input
   /** Adds the session-command layer to the agent's stream. The layer saves thread links to this file. */
   readonly sessionLinks?: string
+  /** Delays before the session-command layer sends a command list again. The default is no repeats. */
+  readonly commandRepeats?: readonly number[]
 }
 
 type FormReply = {
@@ -436,9 +438,13 @@ export async function startWire(options: WireOptions = {}) {
       Effect.flatMap((client) => {
         const stream = ndJsonStream(agentToClient.writable, clientToAgent.readable)
         const links = options.sessionLinks
-        return (links ? Effect.promise(() => ACPSessionSwitch.wrap(stream, links)) : Effect.succeed(stream)).pipe(
-          Effect.flatMap((wrapped) => ACP.connect(client, wrapped)),
-        )
+        return (
+          links
+            ? Effect.promise(() =>
+                ACPSessionSwitch.wrap(stream, links, { commandRepeats: options.commandRepeats ?? [] }),
+              )
+            : Effect.succeed(stream)
+        ).pipe(Effect.flatMap((wrapped) => ACP.connect(client, wrapped)))
       }),
       Scope.provide(agentScope),
       (effect) =>

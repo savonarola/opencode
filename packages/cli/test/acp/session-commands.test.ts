@@ -90,6 +90,19 @@ describe("acp session commands", () => {
     expect(said(acp, thread.sessionId)).toContain("this thread is on it")
     expect([...acp.server.sessions.keys()]).toEqual([thread.sessionId])
   })
+
+  test("repeats the command list for clients that drop the first one", async () => {
+    await using dir = await tmpdir()
+    await using acp = await start(dir.path, { commandRepeats: [0, 0] })
+    const thread = await acp.newSession()
+    const lists = () =>
+      acp.updates.filter(
+        (item) => item.sessionId === thread.sessionId && item.update.sessionUpdate === "available_commands_update",
+      )
+
+    await acp.until(() => lists().length === 3, "the command list and two repeats")
+    expect(new Set(lists().map((item) => JSON.stringify(item.update))).size).toBe(1)
+  })
 })
 
 async function start(directory: string, options: WireOptions = {}) {
